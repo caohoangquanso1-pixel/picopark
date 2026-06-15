@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Super Pico Park - Mùa Hè Rực Rỡ</title>
+    <style>
+        /* CHUYỂN SANG MÀU SÁNG, FULL SCREEN */
+        body { margin: 0; background: #87CEEB; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #uiLayer { position: absolute; top: 10px; left: 20px; color: #333; pointer-events: none; }
+        h1 { margin: 0; color: #fff; font-size: 32px; text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
+        .hud { font-weight: bold; font-size: 18px; color: #fff; text-shadow: 1px 1px 2px #000; margin-top: 5px; }
+        .oxygen-bar { width: 150px; height: 18px; background: #333; border: 2px solid #fff; border-radius: 4px; display: inline-block; vertical-align: middle; margin-left: 10px; }
+        .oxygen-fill { width: 100%; height: 100%; background: #00a8ff; transition: width 0.1s; }
+    </style>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+    <div id="uiLayer">
+        <h1 id="mapTitle">SUPER PICO PARK - MAP 1</h1>
+        <div class="hud">Cơ chế bựa: Cầm đà chạy đâm vào đồng đội để húc bay nó! Phải có ít nhất 2 người sống sót đứng ở cửa mới qua màn.</div>
+        <div class="hud">OXY DƯỚI NƯỚC: <div class="oxygen-bar"><div id="oxyFill" class="oxygen-fill"></div></div></div>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const socket = io();
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // FULLSCREEN RESIZE
+        function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+        window.addEventListener('resize', resize); resize();
+
+        const gravity = 0.6;
+        let localPlayer = { x: 50, y: 50, vx: 0, vy: 0, width: 32, height: 40, ground: false, facing: 'right', oxygen: 100, bumpCooldown: 0 };
+        let otherPlayers = {};
+        let gameState = { platforms: [], spikes: [], lava: [], water: [], wind: [], enemies: [], key: {}, door: {}, gameFinished: false };
+        
+        let cameraX = 0; let cameraY = 0;
+        const MAP_WIDTH = 3000;
+
+        const keys = {};
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        socket.on('currentPlayers', (sp) => {
+            Object.keys(sp).forEach((id) => {
+                if (id === socket.id) {
+                    localPlayer.color = sp[id].color; localPlayer.x = sp[id].x; localPlayer.y = sp[id].y;
+                } else { otherPlayers[id] = sp[id]; }
+            });
+        });
+
+        socket.on('newPlayer', p => { otherPlayers[p.id] = p; });
+        socket.on('playerMoved', p => { if (otherPlayers[p.id]) otherPlayers[p.id] = p; });
+        socket.on('playerDisconnected', id => delete otherPlayers[id]);
+        socket.on('gameState', s => { gameState = s; document.getElementById('mapTitle').innerText = `SUPER PICO PARK - MAP ${gameState.levelIndex + 1}`; });
+        socket.on('updateDynamicObjects', d => { gameState.enemies = d.enemies; });
+
+        // NHẬN LỰC TÔNG TỪ NGƯỜI CHƠI KHÁC
+        socket.on('getBumped', force => {
+            localPlayer.vx = force.vx;
+            localPlayer.vy = force.vy;
+            localPlayer.ground = false;
+        });
+
+        function checkAABB(a, b) {
+            return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+        }
+
+        function update() {
+            if (gameState.gameFinished) return;
+            if (localPlayer.bumpCooldown > 0) localPlayer.bumpCooldown--;
+
+            // MÔI TRƯỜNG NƯỚC & GIÓ
+            let inWater = false;
+            gameState.water.forEach(w => { if (checkAABB(localPlayer, w)) inWater = true; });
+
+            gameState.wind.forEach(w => {
+                if (checkAABB(localPlayer, w)) {
+                    if (w.forceX) localPlayer.vx += w.forceX * 0.1;
+                    if (w.forceY) localPlayer.vy += w.forceY * 0.1;
+                }
+            });
+
+            // LOẠI ĐỊA HÌNH ĐANG ĐỨNG
+            let currentBlockType = 'normal';
+            let floorCheckRect = { x: localPlayer.x + 2, y: localPlayer.y + localPlayer.height, width: localPlayer.width - 4, height: 2 };
+            gameState.platforms.forEach(plat => {
+                if (checkAABB(floorCheckRect, plat)) currentBlockType = plat.type || 'normal';
+            });
+
+            // DI CHUYỂN
+            let moveSpeed = 5; let acc = 0.6;
+            if (currentBlockType === 'honey') moveSpeed = 1.5;
+
+            if (inWater) {
+                if (keys['ArrowLeft'] || keys['KeyA']) localPlayer.vx = -3;
+                else if (keys['ArrowRight'] || keys['KeyD']) localPlayer.vx = 3;
+                else localPlayer.vx *= 0.8;
+                if (keys['ArrowUp'] || keys['KeyW'] || keys['Space']) localPlayer.vy = -4; else localPlayer.vy = Math.min(localPlayer.vy + 0.1, 2);
+                
+                localPlayer.oxygen = Math.max(localPlayer.oxygen - 0.2, 0);
+                if (localPlayer.oxygen <= 0) socket.emit('teamDied');
+            } else {
+                localPlayer.oxygen = Math.min(localPlayer.oxygen + 1.5, 100);
+
+                if (keys['ArrowLeft'] || keys['KeyA']) {
+                    if (currentBlockType === 'ice') localPlayer.vx = Math.max(localPlayer.vx - acc, -moveSpeed);
+                    else localPlayer.vx = -moveSpeed;
+                    localPlayer.facing = 'left';
+                } else if (keys['ArrowRight'] || keys['KeyD']) {
+                    if (currentBlockType === 'ice') localPlayer.vx = Math.min(localPlayer.vx + acc, moveSpeed);
+                    else localPlayer.vx = moveSpeed;
+                    localPlayer.facing = 'right';
+                } else {
+                    if (currentBlockType === 'ice') localPlayer.vx *= 0.98;
+                    else localPlayer.vx *= 0.7; // Ma sát nhẹ
+                }
+
+                if ((keys['ArrowUp'] || keys['KeyW'] || keys['Space']) && localPlayer.ground && currentBlockType !== 'honey') {
+                    if (currentBlockType === 'bounce') localPlayer.vy = -18; // Nảy cực mạnh
+                    else localPlayer.vy = -12; 
+                    localPlayer.ground = false;
+                }
+                localPlayer.vy += gravity;
+            }
+
+            document.getElementById('oxyFill').style.width = `${localPlayer.oxygen}%`;
+
+            // VẬT LÝ AABB CHUẨN XÁC: XỬ LÝ TRỤC X TRƯỚC
+            localPlayer.x += localPlayer.vx;
+            if (localPlayer.x < 0) localPlayer.x = 0;
+            if (localPlayer.x + localPlayer.width > MAP_WIDTH) localPlayer.x = MAP_WIDTH - localPlayer.width;
+
+            gameState.platforms.forEach(plat => {
+                if (checkAABB(localPlayer, plat)) {
+                    if (localPlayer.vx > 0) localPlayer.x = plat.x - localPlayer.width; // Đụng tường phải
+                    else if (localPlayer.vx < 0) localPlayer.x = plat.x + plat.width; // Đụng tường trái
+                    localPlayer.vx = 0;
+                }
+            });
+
+            // XỬ LÝ TRỤC Y
+            localPlayer.y += localPlayer.vy;
+            localPlayer.ground = false;
+
+            gameState.platforms.forEach(plat => {
+                if (checkAABB(localPlayer, plat)) {
+                    if (localPlayer.vy > 0) { // Đang rớt xuống chạm sàn
+                        localPlayer.y = plat.y - localPlayer.height;
+                        localPlayer.vy = 0;
+                        localPlayer.ground = true;
+                    } else if (localPlayer.vy < 0) { // Đang nhảy lên đụng trần
+                        localPlayer.y = plat.y + plat.height;
+                        localPlayer.vy = 0;
+                    }
+                }
+            });
+
+            // CƠ CHẾ BÓP ĐỒNG ĐỘI (BUMP)
+            Object.keys(otherPlayers).forEach(id => {
+                let other = otherPlayers[id];
+                let otherRect = {x: other.x, y: other.y, width: 32, height: 40};
+                if (checkAABB(localPlayer, otherRect) && localPlayer.bumpCooldown === 0) {
+                    // Nếu mình đang chạy nhanh hơn
+                    if (Math.abs(localPlayer.vx) > 2) {
+                        let pushDir = localPlayer.vx > 0 ? 15 : -15; // Húc văng mạnh
+                        socket.emit('bumpPlayer', { targetId: id, vx: pushDir, vy: -6 });
+                        localPlayer.vx = -localPlayer.vx * 0.5; // Dội lại một xíu cho logic
+                        localPlayer.bumpCooldown = 30; // Tránh spam
+                    }
+                }
+            });
+
+            socket.emit('playerMovement', { x: localPlayer.x, y: localPlayer.y, facing: localPlayer.facing });
+
+            // CAMERA CĂN GIỮA MÀN HÌNH
+            cameraX = localPlayer.x - canvas.width / 2 + 16;
+            cameraY = localPlayer.y - canvas.height / 2 + 100; // Nhìn xuống dưới một chút
+            if (cameraX < 0) cameraX = 0;
+            if (cameraX > MAP_WIDTH - canvas.width) cameraX = MAP_WIDTH - canvas.width;
+
+            // KIỂM TRA CHẾT
+            let dead = false;
+            gameState.spikes.forEach(s => { if (checkAABB(localPlayer, s)) dead = true; });
+            gameState.lava.forEach(l => { if (checkAABB(localPlayer, l)) dead = true; });
+            gameState.enemies.forEach(e => { if (checkAABB(localPlayer, e)) dead = true; });
+            if (localPlayer.y > 1500) dead = true; // Rớt xuống vực
+            if (dead) { socket.emit('teamDied'); return; }
+
+            // CHÌA KHÓA & CỬA
+            let keyRect = { x: gameState.key?.x, y: gameState.key?.y, width: 30, height: 30 };
+            if (gameState.key && !gameState.key.collected && checkAABB(localPlayer, keyRect)) {
+                socket.emit('updateGameState', { key: { ...gameState.key, collected: true } });
+            }
+
+            if (gameState.key && gameState.key.collected && gameState.door) {
+                let totalPlayers = Object.keys(otherPlayers).length + 1;
+                let insideCount = 0;
+                let doorRect = { x: gameState.door.x, y: gameState.door.y, width: 60, height: 80 };
+                
+                if (checkAABB(localPlayer, doorRect)) insideCount++;
+                Object.keys(otherPlayers).forEach(id => { 
+                    if (checkAABB({x: otherPlayers[id].x, y: otherPlayers[id].y, width: 32, height: 40}, doorRect)) insideCount++; 
+                });
+
+                // LUẬT: Phải có ít nhất 2 người trong server, và tất cả phải đang đứng trong cửa
+                if (insideCount === totalPlayers && totalPlayers >= 2) {
+                    socket.emit('updateGameState', { door: { ...gameState.door, win: true } });
+                }
+            }
+        }
+
+        // VẼ NHÂN VẬT AMONG US
+        function drawAmongUs(p, color) {
+            ctx.fillStyle = color;
+            ctx.beginPath(); ctx.roundRect(p.x, p.y, p.width, p.height, 12); ctx.fill(); // Thân
+            
+            // Balo
+            ctx.fillStyle = color;
+            if (p.facing === 'right') { ctx.beginPath(); ctx.roundRect(p.x - 8, p.y + 10, 10, 20, 5); ctx.fill(); } 
+            else { ctx.beginPath(); ctx.roundRect(p.x + p.width - 2, p.y + 10, 10, 20, 5); ctx.fill(); }
+
+            // Kính (Visor)
+            ctx.fillStyle = '#a4b0be';
+            let visorX = p.facing === 'right' ? p.x + 12 : p.x - 4;
+            ctx.beginPath(); ctx.roundRect(visorX, p.y + 6, 24, 14, 7); ctx.fill();
+            
+            // Bóng kính
+            ctx.fillStyle = '#dfe4ea';
+            let highlightX = p.facing === 'right' ? p.x + 24 : p.x - 2;
+            ctx.beginPath(); ctx.roundRect(highlightX, p.y + 8, 8, 6, 3); ctx.fill();
+        }
+
+        function drawBlock(plat) {
+            if (plat.type === 'invisible') return; // Khối tàng hình không vẽ gì cả
+            
+            ctx.fillStyle = '#2ed573'; // Mặc định nền cỏ xanh
+            if (plat.type === 'ice') ctx.fillStyle = '#70a1ff';
+            if (plat.type === 'honey') ctx.fillStyle = '#ffa502';
+            if (plat.type === 'bounce') ctx.fillStyle = '#ff4757'; // Lò xo màu đỏ
+
+            ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
+            ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth = 2;
+            ctx.strokeRect(plat.x, plat.y, plat.width, plat.height);
+            
+            if(plat.type === 'bounce') {
+                ctx.fillStyle = '#fff'; ctx.font = '14px Arial'; ctx.fillText('↑↑', plat.x + plat.width/2 - 8, plat.y + 15);
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(-cameraX, -cameraY);
+
+            // Nước
+            ctx.fillStyle = 'rgba(52, 152, 219, 0.5)';
+            gameState.water.forEach(w => ctx.fillRect(w.x, w.y, w.width, w.height));
+
+            // Gió (vẽ hạt bụi mờ bay bay)
+            ctx.fillStyle = 'rgba(236, 240, 241, 0.3)';
+            gameState.wind.forEach(w => {
+                ctx.fillRect(w.x, w.y, w.width, w.height);
+                ctx.fillStyle = '#fff'; ctx.fillText('🌬️', w.x + w.width/2 - 10, w.y + w.height/2);
+            });
+
+            // Khối
+            gameState.platforms.forEach(plat => drawBlock(plat));
+
+            // Gai
+            ctx.fillStyle = '#7f8fa6';
+            gameState.spikes.forEach(s => {
+                for (let i = 0; i < s.width; i += 20) {
+                    ctx.beginPath(); ctx.moveTo(s.x + i, s.y + s.height); ctx.lineTo(s.x + i + 10, s.y); ctx.lineTo(s.x + i + 20, s.y + s.height); ctx.fill();
+                }
+            });
+
+            // Dung nham
+            ctx.fillStyle = '#ff6b81';
+            gameState.lava.forEach(l => ctx.fillRect(l.x, l.y, l.width, l.height));
+
+            // Quái vật
+            ctx.fillStyle = '#2f3542';
+            gameState.enemies.forEach(e => {
+                ctx.beginPath(); ctx.arc(e.x + 16, e.y + 16, 16, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = '#ff4757'; ctx.beginPath(); ctx.arc(e.x + 10, e.y + 10, 4, 0, Math.PI*2); ctx.arc(e.x + 22, e.y + 10, 4, 0, Math.PI*2); ctx.fill();
+            });
+
+            // Cửa
+            if (gameState.door) {
+                let winnable = (gameState.key && gameState.key.collected && Object.keys(otherPlayers).length >= 1);
+                ctx.fillStyle = winnable ? '#2ecc71' : '#a4b0be';
+                ctx.fillRect(gameState.door.x, gameState.door.y, 60, 80);
+                ctx.fillStyle = '#2c3e50'; ctx.fillRect(gameState.door.x + 10, gameState.door.y + 10, 40, 60);
+                if (!winnable) { ctx.fillStyle = '#fff'; ctx.font='12px Arial'; ctx.fillText('Cần >1 Player', gameState.door.x - 5, gameState.door.y - 10); }
+            }
+
+            // Chìa Khóa
+            if (gameState.key && !gameState.key.collected) { ctx.font = '30px Arial'; ctx.fillText('🗝️', gameState.key.x, gameState.key.y + 25); }
+
+            // Người chơi (Among Us)
+            if (localPlayer.color) drawAmongUs(localPlayer, localPlayer.color);
+            Object.keys(otherPlayers).forEach(id => drawAmongUs(otherPlayers[id], otherPlayers[id].color));
+
+            ctx.restore();
+
+            if (gameState.gameFinished) {
+                ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#f1c40f'; ctx.font = 'bold 50px Arial'; ctx.textAlign = 'center';
+                ctx.fillText("CHÚC MỪNG BẠN ĐÃ PHÁ ĐẢO! 🎉", canvas.width/2, canvas.height/2);
+            }
+        }
+
+        function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
+        gameLoop();
+    </script>
+</body>
+</html>

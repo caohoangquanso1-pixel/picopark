@@ -1,0 +1,13 @@
+{
+  "name": "super-pico-park",
+  "version": "1.0.0",
+  "description": "Game Pico Park tự code siêu bựa",
+  "main": "picopark.js",
+  "scripts": {
+    "start": "node picopark.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
