@@ -18,7 +18,7 @@
 
     <div id="uiLayer">
         <h1 id="mapTitle">SUPER PICO PARK - MAP 1</h1>
-        <div class="hud">CƠ CHẾ: Cổng tím ra cổng vàng! Băng chuyền đẩy lùi! 1 người CHẾT là CẢ TEAM chơi lại! Chỉ cần 1 người vào CỬA là qua màn.</div>
+        <div class="hud">CƠ CHẾ MỚI: 🌌 Vùng Không Trọng Lực - Ấn Nhảy (W/Space) để bay lượn tự do!</div>
         <div class="hud">OXY DƯỚI NƯỚC: <div class="oxygen-bar"><div id="oxyFill" class="oxygen-fill"></div></div></div>
     </div>
     
@@ -36,10 +36,11 @@
         let localId = null;
         let localPlayer = { x: 50, y: 100, vx: 0, vy: 0, width: 32, height: 40, ground: false, facing: 'right', oxygen: 100, portalCooldown: 0 };
         let otherPlayers = {};
-        let gameState = { platforms: [], spikes: [], lava: [], water: [], wind: [], enemies: [], sawblades: [], portals: [], buttons: [], gates: [], key: {}, door: {}, gameFinished: false };
+        let gameState = { platforms: [], spikes: [], lava: [], water: [], wind: [], enemies: [], sawblades: [], portals: [], zeroGravity: [], key: {}, door: {}, gameFinished: false };
         
         let cameraX = 0; let cameraY = 0;
         const MAP_WIDTH = 3000;
+        let lastEmitTime = 0; // Giới hạn băng thông gửi gói tin mạng
 
         const keys = {};
         window.addEventListener('keydown', e => keys[e.code] = true);
@@ -48,31 +49,49 @@
         socket.on('initId', id => { localId = id; });
 
         socket.on('currentPlayers', (sp) => {
+            // Loại bỏ những người chơi không còn tồn tại trên server để xóa nhân bản ma
+            Object.keys(otherPlayers).forEach(id => { if (!sp[id]) delete otherPlayers[id]; });
+            
             Object.keys(sp).forEach((id) => {
                 if (id === localId || id === socket.id) {
-                    localPlayer.color = sp[id].color; localPlayer.x = sp[id].x; localPlayer.y = sp[id].y;
-                    localPlayer.width = sp[id].width || 32; localPlayer.height = sp[id].height || 40;
+                    localPlayer.color = sp[id].color;
                 } else { 
-                    otherPlayers[id] = sp[id]; 
+                    if (!otherPlayers[id]) {
+                        otherPlayers[id] = { ...sp[id], targetX: sp[id].x, targetY: sp[id].y };
+                    } else {
+                        otherPlayers[id].targetX = sp[id].x;
+                        otherPlayers[id].targetY = sp[id].y;
+                        otherPlayers[id].facing = sp[id].facing;
+                    }
                 }
             });
         });
 
-        socket.on('newPlayer', p => { if(p.id !== socket.id) otherPlayers[p.id] = p; });
-        socket.on('playerMoved', p => { otherPlayers[p.id] = p; });
+        socket.on('playerMoved', p => { 
+            if(p.id !== socket.id && p.id !== localId) {
+                if (!otherPlayers[p.id]) {
+                    otherPlayers[p.id] = { ...p, targetX: p.x, targetY: p.y };
+                } else {
+                    otherPlayers[p.id].targetX = p.x;
+                    otherPlayers[p.id].targetY = p.y;
+                    otherPlayers[p.id].facing = p.facing;
+                }
+            }
+        });
+
         socket.on('playerDisconnected', id => delete otherPlayers[id]);
         
         socket.on('gameState', s => { 
             gameState = s; 
+            otherPlayers = {}; // XÓA SẠCH BÓNG MA KHI CHUYỂN MÀN CHƠI MỚI
             document.getElementById('mapTitle').innerText = `SUPER PICO PARK - MAP ${gameState.levelIndex + 1}`; 
+            if (s.spawn) { localPlayer.x = s.spawn.x; localPlayer.y = s.spawn.y; }
             localPlayer.vx = 0; localPlayer.vy = 0;
         });
         
         socket.on('updateDynamicObjects', d => { 
             if(d.enemies) gameState.enemies = d.enemies; 
             if(d.sawblades) gameState.sawblades = d.sawblades;
-            if(d.buttons) gameState.buttons = d.buttons;
-            if(d.gates) gameState.gates = d.gates;
         });
 
         function checkAABB(a, b) {
@@ -82,10 +101,25 @@
         function update() {
             if (gameState.gameFinished) return;
 
+            // NỘI SUY MƯỢT MÀ VỊ TRÍ CỦA ĐỒNG ĐỘI (CHỐNG GIẬT LAG HÌNH ẢNH)
+            Object.keys(otherPlayers).forEach(id => {
+                let other = otherPlayers[id];
+                if (other.targetX !== undefined) {
+                    other.x += (other.targetX - other.x) * 0.25;
+                    other.y += (other.targetY - other.y) * 0.25;
+                }
+            });
+
             if (localPlayer.portalCooldown > 0) localPlayer.portalCooldown--;
 
             let inWater = false;
             gameState.water.forEach(w => { if (checkAABB(localPlayer, w)) inWater = true; });
+
+            // KIỂM TRA VÙNG KHÔNG TRỌNG LỰC 🌌
+            let inZeroG = false;
+            if (gameState.zeroGravity) {
+                gameState.zeroGravity.forEach(zg => { if (checkAABB(localPlayer, zg)) inZeroG = true; });
+            }
 
             gameState.wind.forEach(w => {
                 if (checkAABB(localPlayer, w)) {
@@ -123,6 +157,17 @@
                 
                 localPlayer.oxygen = Math.max(localPlayer.oxygen - 0.2, 0);
                 if (localPlayer.oxygen <= 0) socket.emit('teamDied');
+            } else if (inZeroG) {
+                // DI CHUYỂN TRONG MÔI TRƯỜNG KHÔNG TRỌNG LỰC
+                if (keys['ArrowLeft'] || keys['KeyA']) { localPlayer.vx = -4; localPlayer.facing = 'left'; }
+                else if (keys['ArrowRight'] || keys['KeyD']) { localPlayer.vx = 4; localPlayer.facing = 'right'; }
+                else localPlayer.vx *= 0.8;
+
+                if (keys['ArrowUp'] || keys['KeyW'] || keys['Space']) localPlayer.vy = -4;
+                else if (keys['ArrowDown'] || keys['KeyS']) localPlayer.vy = 4;
+                else localPlayer.vy *= 0.8;
+                
+                localPlayer.ground = false;
             } else {
                 localPlayer.oxygen = Math.min(localPlayer.oxygen + 1.5, 100);
 
@@ -162,27 +207,6 @@
                 }
             });
 
-            // VẬT LÝ CỬA SẬP (GATES) - TRỤC X
-            if (gameState.gates) {
-                gameState.gates.forEach(gate => {
-                    if (!gate.open && checkAABB(localPlayer, gate)) {
-                        if (localPlayer.vx > 0) localPlayer.x = gate.x - localPlayer.width;
-                        else if (localPlayer.vx < 0) localPlayer.x = gate.x + gate.width;
-                        localPlayer.vx = 0;
-                    }
-                });
-            }
-
-            Object.values(otherPlayers).forEach(other => {
-                let w = other.width || 32; let h = other.height || 40;
-                let otherRect = {x: other.x, y: other.y, width: w, height: h};
-                if (checkAABB(localPlayer, otherRect)) {
-                    if (localPlayer.vx > 0) localPlayer.x = otherRect.x - localPlayer.width;
-                    else if (localPlayer.vx < 0) localPlayer.x = otherRect.x + otherRect.width;
-                    localPlayer.vx = 0;
-                }
-            });
-
             // === VẬT LÝ TRỤC Y ===
             localPlayer.y += localPlayer.vy;
             localPlayer.ground = false;
@@ -200,44 +224,12 @@
                 }
             });
 
-            // VẬT LÝ CỬA SẬP (GATES) - TRỤC Y
-            if (gameState.gates) {
-                gameState.gates.forEach(gate => {
-                    if (!gate.open && checkAABB(localPlayer, gate)) {
-                        if (localPlayer.vy > 0) {
-                            localPlayer.y = gate.y - localPlayer.height;
-                            localPlayer.vy = 0;
-                            localPlayer.ground = true;
-                        } else if (localPlayer.vy < 0) {
-                            localPlayer.y = gate.y + gate.height;
-                            localPlayer.vy = 0;
-                        }
-                    }
-                });
+            // GIAO TIẾP ĐƯỢC GIỚI HẠN THỜI GIAN ĐỂ CHẶN LAG ĐƯỜNG TRUYỀN MẠNG
+            let now = Date.now();
+            if (now - lastEmitTime > 35) {
+                socket.emit('playerMovement', { x: localPlayer.x, y: localPlayer.y, facing: localPlayer.facing });
+                lastEmitTime = now;
             }
-
-            Object.values(otherPlayers).forEach(other => {
-                let w = other.width || 32; let h = other.height || 40;
-                let otherRect = {x: other.x, y: other.y, width: w, height: h};
-                if (checkAABB(localPlayer, otherRect)) {
-                    if (localPlayer.vy > 0) { 
-                        localPlayer.y = otherRect.y - localPlayer.height;
-                        localPlayer.vy = 0;
-                        localPlayer.ground = true;
-                    } else if (localPlayer.vy < 0) { 
-                        localPlayer.y = otherRect.y + otherRect.height;
-                        localPlayer.vy = 0;
-                    }
-                }
-            });
-
-            socket.emit('playerMovement', { x: localPlayer.x, y: localPlayer.y, facing: localPlayer.facing });
-
-            // CAMERA
-            cameraX = localPlayer.x - canvas.width / 2 + 16;
-            cameraY = localPlayer.y - canvas.height / 2 + 100;
-            if (cameraX < 0) cameraX = 0;
-            if (cameraX > MAP_WIDTH - canvas.width) cameraX = MAP_WIDTH - canvas.width;
 
             // KIỂM TRA CHẾT
             let dead = false;
@@ -251,49 +243,40 @@
             if (localPlayer.y > 1500) dead = true; 
             if (dead) { socket.emit('teamDied'); return; }
 
-            // CHÌA KHÓA - GỬI LEVELINDEX ĐỂ CHECK TRÙNG
+            // LỤM CHÌA KHÓA CHỐT KHÓA TẠI CLIENT TRƯỚC ĐỂ TRÁNH TRÙNG LẶP GÓI TIN CHẠM VÀO NHAU
             let keyRect = { x: gameState.key?.x, y: gameState.key?.y, width: 30, height: 30 };
             if (gameState.key && !gameState.key.collected && checkAABB(localPlayer, keyRect)) {
-                socket.emit('updateGameState', { levelIndex: gameState.levelIndex, key: { ...gameState.key, collected: true, holderId: socket.id } });
+                gameState.key.collected = true; 
+                socket.emit('updateGameState', { levelIndex: gameState.levelIndex, key: { ...gameState.key, collected: true } });
             }
 
-            // CHẠM CỬA THẮNG - FIX LỖI NHẢY CÓC MÀN CHƠI
+            // CHẠM CỬA THẮNG (SẼ ĐƯỢC SERVER GIỮ LẠI TRÌ HOÃN CHUYỂN MÀN CHƠI)
             if (gameState.key && gameState.key.collected && gameState.door && !gameState.door.win) {
                 let doorRect = { x: gameState.door.x, y: gameState.door.y, width: 60, height: 80 };
                 if (checkAABB(localPlayer, doorRect)) {
+                    gameState.door.win = true;
                     socket.emit('updateGameState', { levelIndex: gameState.levelIndex, door: { ...gameState.door, win: true } });
                 }
             }
         }
 
-        function drawAmongUs(p, color, id) {
+        function drawAmongUs(p, color) {
             let w = p.width || 32; let h = p.height || 40; 
-            
             ctx.fillStyle = color;
             ctx.beginPath(); ctx.roundRect(p.x, p.y, w, h, 12); ctx.fill(); 
-            
             ctx.fillStyle = color;
             if (p.facing === 'right') { ctx.beginPath(); ctx.roundRect(p.x - 8, p.y + 10, 10, 20, 5); ctx.fill(); } 
             else { ctx.beginPath(); ctx.roundRect(p.x + w - 2, p.y + 10, 10, 20, 5); ctx.fill(); }
-
             ctx.fillStyle = '#a4b0be';
             let visorX = p.facing === 'right' ? p.x + 12 : p.x - 4;
             ctx.beginPath(); ctx.roundRect(visorX, p.y + 6, 24, 14, 7); ctx.fill();
-            
             ctx.fillStyle = '#dfe4ea';
             let highlightX = p.facing === 'right' ? p.x + 24 : p.x - 2;
             ctx.beginPath(); ctx.roundRect(highlightX, p.y + 8, 8, 6, 3); ctx.fill();
-
-            // HIỆU ỨNG VƯƠNG MIỆN CHO NGƯỜI CẦM KHÓA 👑
-            if (gameState.key && gameState.key.collected && gameState.key.holderId === id) {
-                ctx.font = '22px Arial';
-                ctx.fillText('👑', p.x + w/2 - 11, p.y - 8);
-            }
         }
 
         function drawBlock(plat) {
             if (plat.type === 'invisible') return;
-            
             ctx.fillStyle = '#2ed573'; 
             if (plat.type === 'ice') ctx.fillStyle = '#70a1ff';
             if (plat.type === 'honey') ctx.fillStyle = '#ffa502';
@@ -308,14 +291,9 @@
                 }
                 return;
             }
-
             ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
             ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth = 2;
             ctx.strokeRect(plat.x, plat.y, plat.width, plat.height);
-            
-            if(plat.type === 'bounce') {
-                ctx.fillStyle = '#fff'; ctx.font = '14px Arial'; ctx.fillText('↑↑', plat.x + plat.width/2 - 8, plat.y + 15);
-            }
         }
 
         function draw() {
@@ -323,49 +301,20 @@
             ctx.save();
             ctx.translate(-cameraX, -cameraY);
 
+            // VẼ VÙNG KHÔNG TRỌNG LỰC 🌌 (BẢO ĐẢM HIỆU ỨNG ĐẸP, KHÔNG LAG)
+            if (gameState.zeroGravity) {
+                gameState.zeroGravity.forEach(zg => {
+                    ctx.fillStyle = 'rgba(155, 89, 182, 0.15)';
+                    ctx.fillRect(zg.x, zg.y, zg.width, zg.height);
+                    ctx.strokeStyle = 'rgba(155, 89, 182, 0.4)'; ctx.lineWidth = 2; ctx.strokeRect(zg.x, zg.y, zg.width, zg.height);
+                    ctx.fillStyle = '#9b59b6'; ctx.font = '16px Arial'; ctx.fillText('🌌 ZERO-G', zg.x + 10, zg.y + 25);
+                });
+            }
+
             ctx.fillStyle = 'rgba(52, 152, 219, 0.5)';
             gameState.water.forEach(w => ctx.fillRect(w.x, w.y, w.width, w.height));
 
-            ctx.fillStyle = 'rgba(236, 240, 241, 0.3)';
-            gameState.wind.forEach(w => {
-                ctx.fillRect(w.x, w.y, w.width, w.height);
-                ctx.fillStyle = '#fff'; ctx.fillText('🌬️', w.x + w.width/2 - 10, w.y + w.height/2);
-            });
-
-            gameState.portals.forEach(p => {
-                ctx.fillStyle = '#9b59b6';
-                ctx.beginPath(); ctx.ellipse(p.x1 + 20, p.y1 + 30, 20, 30, 0, 0, Math.PI*2); ctx.fill();
-                ctx.fillStyle = '#f1c40f';
-                ctx.beginPath(); ctx.ellipse(p.x2 + 20, p.y2 + 30, 20, 30, 0, 0, Math.PI*2); ctx.fill();
-            });
-
             gameState.platforms.forEach(plat => drawBlock(plat));
-
-            // VẼ NÚT BẤM CO-OP
-            if (gameState.buttons) {
-                gameState.buttons.forEach(btn => {
-                    ctx.fillStyle = btn.pressed ? '#2ecc71' : '#e74c3c';
-                    let renderY = btn.pressed ? btn.y + 5 : btn.y;
-                    let renderH = btn.pressed ? btn.height - 5 : btn.height;
-                    ctx.fillRect(btn.x, renderY, btn.width, renderH);
-                    ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
-                    ctx.strokeRect(btn.x, renderY, btn.width, renderH);
-                });
-            }
-
-            // VẼ CỬA SẬP CO-OP
-            if (gameState.gates) {
-                gameState.gates.forEach(gate => {
-                    if (!gate.open) {
-                        ctx.fillStyle = '#7f8c8d'; ctx.fillRect(gate.x, gate.y, gate.width, gate.height);
-                        ctx.strokeStyle = '#2c3e50'; ctx.lineWidth = 2; ctx.strokeRect(gate.x, gate.y, gate.width, gate.height);
-                    } else {
-                        ctx.strokeStyle = 'rgba(127, 140, 141, 0.3)'; ctx.lineWidth = 2;
-                        ctx.setLineDash([4, 4]); ctx.strokeRect(gate.x, gate.y, gate.width, gate.height);
-                        ctx.setLineDash([]);
-                    }
-                });
-            }
 
             ctx.fillStyle = '#7f8fa6';
             gameState.spikes.forEach(s => {
@@ -377,41 +326,22 @@
             ctx.fillStyle = '#ff6b81';
             gameState.lava.forEach(l => {
                 ctx.fillRect(l.x, l.y, l.width, l.height);
-                ctx.fillStyle = 'rgba(255,255,255,0.3)';
-                for(let i=0; i<l.width; i+=40) { ctx.beginPath(); ctx.arc(l.x + i + (Date.now()/200)%20, l.y + 10, 5, 0, Math.PI*2); ctx.fill(); }
-            });
-
-            ctx.fillStyle = '#2f3542';
-            gameState.enemies.forEach(e => {
-                ctx.beginPath(); ctx.arc(e.x + 16, e.y + 16, 16, 0, Math.PI * 2); ctx.fill();
-                ctx.fillStyle = '#ff4757'; ctx.beginPath(); ctx.arc(e.x + 10, e.y + 10, 4, 0, Math.PI*2); ctx.arc(e.x + 22, e.y + 10, 4, 0, Math.PI*2); ctx.fill();
             });
 
             gameState.sawblades.forEach(saw => {
-                ctx.save();
-                ctx.translate(saw.x, saw.y);
-                ctx.rotate(Date.now() / 50); 
-                ctx.fillStyle = '#bdc3c7'; ctx.beginPath(); ctx.arc(0, 0, saw.radius, 0, Math.PI * 2); ctx.fill();
-                ctx.fillStyle = '#7f8c8d';
-                for(let i=0; i<8; i++) {
-                    ctx.rotate(Math.PI / 4);
-                    ctx.beginPath(); ctx.moveTo(saw.radius - 5, -8); ctx.lineTo(saw.radius + 10, 0); ctx.lineTo(saw.radius - 5, 8); ctx.fill();
-                }
-                ctx.fillStyle = '#e74c3c'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI*2); ctx.fill(); 
-                ctx.restore();
+                ctx.save(); ctx.translate(saw.x, saw.y); ctx.rotate(Date.now() / 50); 
+                ctx.fillStyle = '#bdc3c7'; ctx.beginPath(); ctx.arc(0, 0, saw.radius, 0, Math.PI * 2); ctx.fill(); ctx.restore();
             });
 
             if (gameState.door) {
-                let winnable = (gameState.key && gameState.key.collected);
-                ctx.fillStyle = gameState.door.win ? '#2ecc71' : (winnable ? '#f1c40f' : '#a4b0be');
+                ctx.fillStyle = gameState.door.win ? '#2ecc71' : ((gameState.key && gameState.key.collected) ? '#f1c40f' : '#a4b0be');
                 ctx.fillRect(gameState.door.x, gameState.door.y, 60, 80);
-                ctx.fillStyle = '#2c3e50'; ctx.fillRect(gameState.door.x + 10, gameState.door.y + 10, 40, 60);
             }
 
             if (gameState.key && !gameState.key.collected) { ctx.font = '30px Arial'; ctx.fillText('🗝️', gameState.key.x, gameState.key.y + 25); }
 
-            if (localPlayer.color) drawAmongUs(localPlayer, localPlayer.color, localId);
-            Object.keys(otherPlayers).forEach(id => drawAmongUs(otherPlayers[id], otherPlayers[id].color, id));
+            if (localPlayer.color) drawAmongUs(localPlayer, localPlayer.color);
+            Object.keys(otherPlayers).forEach(id => drawAmongUs(otherPlayers[id], otherPlayers[id].color));
 
             ctx.restore();
 
