@@ -36,7 +36,7 @@
         let localId = null;
         let localPlayer = { x: 50, y: 100, vx: 0, vy: 0, width: 32, height: 40, ground: false, facing: 'right', oxygen: 100, portalCooldown: 0 };
         let otherPlayers = {};
-        let gameState = { platforms: [], spikes: [], lava: [], water: [], wind: [], enemies: [], sawblades: [], portals: [], key: {}, door: {}, gameFinished: false };
+        let gameState = { platforms: [], spikes: [], lava: [], water: [], wind: [], enemies: [], sawblades: [], portals: [], buttons: [], gates: [], key: {}, door: {}, gameFinished: false };
         
         let cameraX = 0; let cameraY = 0;
         const MAP_WIDTH = 3000;
@@ -65,13 +65,14 @@
         socket.on('gameState', s => { 
             gameState = s; 
             document.getElementById('mapTitle').innerText = `SUPER PICO PARK - MAP ${gameState.levelIndex + 1}`; 
-            // Đặt lại tọa độ khi đổi màn (tránh bị kẹt camera hoặc kẹt vật lý)
             localPlayer.vx = 0; localPlayer.vy = 0;
         });
         
         socket.on('updateDynamicObjects', d => { 
             if(d.enemies) gameState.enemies = d.enemies; 
             if(d.sawblades) gameState.sawblades = d.sawblades;
+            if(d.buttons) gameState.buttons = d.buttons;
+            if(d.gates) gameState.gates = d.gates;
         });
 
         function checkAABB(a, b) {
@@ -161,6 +162,17 @@
                 }
             });
 
+            // VẬT LÝ CỬA SẬP (GATES) - TRỤC X
+            if (gameState.gates) {
+                gameState.gates.forEach(gate => {
+                    if (!gate.open && checkAABB(localPlayer, gate)) {
+                        if (localPlayer.vx > 0) localPlayer.x = gate.x - localPlayer.width;
+                        else if (localPlayer.vx < 0) localPlayer.x = gate.x + gate.width;
+                        localPlayer.vx = 0;
+                    }
+                });
+            }
+
             Object.values(otherPlayers).forEach(other => {
                 let w = other.width || 32; let h = other.height || 40;
                 let otherRect = {x: other.x, y: other.y, width: w, height: h};
@@ -187,6 +199,22 @@
                     }
                 }
             });
+
+            // VẬT LÝ CỬA SẬP (GATES) - TRỤC Y
+            if (gameState.gates) {
+                gameState.gates.forEach(gate => {
+                    if (!gate.open && checkAABB(localPlayer, gate)) {
+                        if (localPlayer.vy > 0) {
+                            localPlayer.y = gate.y - localPlayer.height;
+                            localPlayer.vy = 0;
+                            localPlayer.ground = true;
+                        } else if (localPlayer.vy < 0) {
+                            localPlayer.y = gate.y + gate.height;
+                            localPlayer.vy = 0;
+                        }
+                    }
+                });
+            }
 
             Object.values(otherPlayers).forEach(other => {
                 let w = other.width || 32; let h = other.height || 40;
@@ -223,24 +251,22 @@
             if (localPlayer.y > 1500) dead = true; 
             if (dead) { socket.emit('teamDied'); return; }
 
-            // CHÌA KHÓA
+            // CHÌA KHÓA - GỬI LEVELINDEX ĐỂ CHECK TRÙNG
             let keyRect = { x: gameState.key?.x, y: gameState.key?.y, width: 30, height: 30 };
             if (gameState.key && !gameState.key.collected && checkAABB(localPlayer, keyRect)) {
-                socket.emit('updateGameState', { key: { ...gameState.key, collected: true } });
+                socket.emit('updateGameState', { levelIndex: gameState.levelIndex, key: { ...gameState.key, collected: true, holderId: socket.id } });
             }
 
-            // CHỈ CẦN 1 NGƯỜI VÀO CỬA LÀ THẮNG - FIX LỖI GỌI MAP LIÊN TỤC
+            // CHẠM CỬA THẮNG - FIX LỖI NHẢY CÓC MÀN CHƠI
             if (gameState.key && gameState.key.collected && gameState.door && !gameState.door.win) {
                 let doorRect = { x: gameState.door.x, y: gameState.door.y, width: 60, height: 80 };
                 if (checkAABB(localPlayer, doorRect)) {
-                    // Khóa trạng thái cửa ở máy con, báo lên server đúng 1 lần thôi
-                    gameState.door.win = true; 
-                    socket.emit('updateGameState', { door: { ...gameState.door, win: true } });
+                    socket.emit('updateGameState', { levelIndex: gameState.levelIndex, door: { ...gameState.door, win: true } });
                 }
             }
         }
 
-        function drawAmongUs(p, color) {
+        function drawAmongUs(p, color, id) {
             let w = p.width || 32; let h = p.height || 40; 
             
             ctx.fillStyle = color;
@@ -257,6 +283,12 @@
             ctx.fillStyle = '#dfe4ea';
             let highlightX = p.facing === 'right' ? p.x + 24 : p.x - 2;
             ctx.beginPath(); ctx.roundRect(highlightX, p.y + 8, 8, 6, 3); ctx.fill();
+
+            // HIỆU ỨNG VƯƠNG MIỆN CHO NGƯỜI CẦM KHÓA 👑
+            if (gameState.key && gameState.key.collected && gameState.key.holderId === id) {
+                ctx.font = '22px Arial';
+                ctx.fillText('👑', p.x + w/2 - 11, p.y - 8);
+            }
         }
 
         function drawBlock(plat) {
@@ -309,6 +341,32 @@
 
             gameState.platforms.forEach(plat => drawBlock(plat));
 
+            // VẼ NÚT BẤM CO-OP
+            if (gameState.buttons) {
+                gameState.buttons.forEach(btn => {
+                    ctx.fillStyle = btn.pressed ? '#2ecc71' : '#e74c3c';
+                    let renderY = btn.pressed ? btn.y + 5 : btn.y;
+                    let renderH = btn.pressed ? btn.height - 5 : btn.height;
+                    ctx.fillRect(btn.x, renderY, btn.width, renderH);
+                    ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+                    ctx.strokeRect(btn.x, renderY, btn.width, renderH);
+                });
+            }
+
+            // VẼ CỬA SẬP CO-OP
+            if (gameState.gates) {
+                gameState.gates.forEach(gate => {
+                    if (!gate.open) {
+                        ctx.fillStyle = '#7f8c8d'; ctx.fillRect(gate.x, gate.y, gate.width, gate.height);
+                        ctx.strokeStyle = '#2c3e50'; ctx.lineWidth = 2; ctx.strokeRect(gate.x, gate.y, gate.width, gate.height);
+                    } else {
+                        ctx.strokeStyle = 'rgba(127, 140, 141, 0.3)'; ctx.lineWidth = 2;
+                        ctx.setLineDash([4, 4]); ctx.strokeRect(gate.x, gate.y, gate.width, gate.height);
+                        ctx.setLineDash([]);
+                    }
+                });
+            }
+
             ctx.fillStyle = '#7f8fa6';
             gameState.spikes.forEach(s => {
                 for (let i = 0; i < s.width; i += 20) {
@@ -345,15 +403,15 @@
 
             if (gameState.door) {
                 let winnable = (gameState.key && gameState.key.collected);
-                ctx.fillStyle = winnable ? '#2ecc71' : '#a4b0be';
+                ctx.fillStyle = gameState.door.win ? '#2ecc71' : (winnable ? '#f1c40f' : '#a4b0be');
                 ctx.fillRect(gameState.door.x, gameState.door.y, 60, 80);
                 ctx.fillStyle = '#2c3e50'; ctx.fillRect(gameState.door.x + 10, gameState.door.y + 10, 40, 60);
             }
 
             if (gameState.key && !gameState.key.collected) { ctx.font = '30px Arial'; ctx.fillText('🗝️', gameState.key.x, gameState.key.y + 25); }
 
-            if (localPlayer.color) drawAmongUs(localPlayer, localPlayer.color);
-            Object.keys(otherPlayers).forEach(id => drawAmongUs(otherPlayers[id], otherPlayers[id].color));
+            if (localPlayer.color) drawAmongUs(localPlayer, localPlayer.color, localId);
+            Object.keys(otherPlayers).forEach(id => drawAmongUs(otherPlayers[id], otherPlayers[id].color, id));
 
             ctx.restore();
 
