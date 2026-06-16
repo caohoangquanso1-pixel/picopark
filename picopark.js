@@ -7,18 +7,19 @@ app.use(express.static('public'));
 
 let players = {};
 let currentLevelIndex = 0;
-let isTransitioning = false; // Chốt chặn chống nhảy màn dồn dập khi multi-touch
+let isTransitioning = false; 
 const MAP_WIDTH = 3000; 
 
-// THIẾT KẾ 10 MAP HOÀN TOÀN MỚI: Khoảng cách ô nhảy chuẩn 120px-140px cực kỳ vừa vặn!
+// THIẾT KẾ 10 MAP MỚI: Khoảng cách nhảy chuẩn, có vùng Zero-G
 const levels = [
-    {   // Map 1: Bước Nhảy Hoàn Hảo (Khoảng cách kịch tính vừa vặn)
+    {   // Map 1: Vỡ Lòng
         spawn: { x: 50, y: 100 },
         key: { x: 800, y: 350, collected: false }, door: { x: 1400, y: 360, win: false },
         platforms: [
             { x: 0, y: 440, width: 500, height: 60 },
-            { x: 630, y: 440, width: 400, height: 60 }, // khoảng trống đúng 130px vượt hố an toàn
-            { x: 1160, y: 440, width: 600, height: 60 }  // khoảng trống đúng 130px vượt hố an toàn
+            { x: 500, y: 200, width: 40, height: 300 }, // Cần đứng lên đầu nhau
+            { x: 630, y: 440, width: 400, height: 60 },
+            { x: 1160, y: 440, width: 600, height: 60 }
         ],
         spikes: []
     },
@@ -33,15 +34,15 @@ const levels = [
         ],
         spikes: [{ x: 410, y: 550, width: 100, height: 50 }]
     },
-    {   // Map 3: Đột Phá Không Trọng Lực 🌌 (SÁNG TẠO MỚI)
+    {   // Map 3: Đột Phá Không Trọng Lực 🌌
         spawn: { x: 50, y: 100 },
         key: { x: 850, y: 120, collected: false }, door: { x: 1500, y: 360, win: false },
         platforms: [
             { x: 0, y: 440, width: 400, height: 60 },
-            { x: 800, y: 220, width: 150, height: 30 }, // lửng lơ trên không
+            { x: 800, y: 220, width: 150, height: 30 },
             { x: 1300, y: 440, width: 500, height: 60 }
         ],
-        zeroGravity: [{ x: 400, y: 50, width: 400, height: 500 }] // Vùng bay lượn kết nối 2 bờ hố sâu!
+        zeroGravity: [{ x: 400, y: 50, width: 400, height: 500 }] 
     },
     {   // Map 4: Sàn Băng Đàn Hồi
         spawn: { x: 50, y: 100 },
@@ -126,6 +127,8 @@ const levels = [
 ];
 
 let gameState = {};
+let lastDeathTime = 0; // Chống spam teamDied liên tục
+
 function initLevel(index) {
     if (index >= levels.length) {
         gameState.gameFinished = true;
@@ -134,6 +137,7 @@ function initLevel(index) {
         let lvl = JSON.parse(JSON.stringify(levels[index]));
         gameState = {
             levelIndex: currentLevelIndex,
+            spawn: lvl.spawn || {x: 50, y: 100}, // SIÊU QUAN TRỌNG ĐỂ CLIENT HỒI SINH
             key: lvl.key, door: lvl.door,
             platforms: lvl.platforms || [], spikes: lvl.spikes || [],
             lava: lvl.lava || [], water: lvl.water || [],
@@ -142,7 +146,7 @@ function initLevel(index) {
             zeroGravity: lvl.zeroGravity || [],
             gameFinished: false
         };
-        let spawnP = lvl.spawn || {x: 50, y: 100};
+        let spawnP = gameState.spawn;
         Object.keys(players).forEach((id, i) => {
             players[id].x = spawnP.x + (i * 10);
             players[id].y = spawnP.y; 
@@ -178,7 +182,7 @@ io.on('connection', (socket) => {
     
     socket.emit('currentPlayers', players);
     socket.emit('gameState', gameState);
-    socket.broadcast.emit('newPlayer', players[socket.id]);
+    socket.broadcast.emit('playerMoved', players[socket.id]);
 
     socket.on('playerMovement', (data) => {
         if (players[socket.id]) {
@@ -189,17 +193,23 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('teamDied', () => { if (!isTransitioning) initLevel(currentLevelIndex); });
+    socket.on('teamDied', () => { 
+        let now = Date.now();
+        // Chặn spam chết liên tục phá server
+        if (!isTransitioning && now - lastDeathTime > 1000) {
+            lastDeathTime = now;
+            initLevel(currentLevelIndex); 
+        }
+    });
     
     socket.on('updateGameState', (updatedState) => {
         if (updatedState.levelIndex !== currentLevelIndex || isTransitioning) return;
 
         if (updatedState.door && updatedState.door.win && !gameState.door.win) { 
             gameState.door.win = true; 
-            io.emit('gameState', gameState); // Thông báo cho tất cả client đổi màu cửa ăn mừng thắp sáng thành công
+            io.emit('gameState', gameState); 
             
             isTransitioning = true;
-            // SỬ DỤNG SETTIMEOUT ĐỂ TỪ TỪ QUA MÀN SAU 1.5 GIÂY ĐÚNG Ý BẠN 🥂
             setTimeout(() => {
                 isTransitioning = false;
                 initLevel(currentLevelIndex + 1); 
