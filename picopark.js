@@ -9,21 +9,30 @@ let players = {};
 let currentLevelIndex = 0;
 const MAP_WIDTH = 3000; 
 
-// HỆ THỐNG MAP ĐÃ THÊM TÍNH NĂNG MỚI (Băng chuyền, Cổng dịch chuyển, Lưỡi cưa)
+// HỆ THỐNG 10 MAP ĐỘ KHÓ TĂNG DẦN
 const levels = [
-    {   // Map 1: Làm quen & Băng chuyền đẩy
+    {   // Map 1: Vỡ Lòng - Nhảy và Chồng Người
+        spawn: { x: 50, y: 100 },
+        key: { x: 900, y: 350, collected: false }, door: { x: 1800, y: 360, win: false },
+        platforms: [
+            { x: 0, y: 440, width: 600, height: 60 },
+            { x: 600, y: 200, width: 40, height: 300 }, // Tường chắn, cần đứng lên đầu nhau
+            { x: 640, y: 440, width: 1400, height: 60 }
+        ],
+        spikes: []
+    },
+    {   // Map 2: Băng Chuyền Trượt Ngã
         spawn: { x: 50, y: 100 },
         key: { x: 1200, y: 350, collected: false }, door: { x: 2200, y: 360, win: false },
         platforms: [
             { x: 0, y: 440, width: 400, height: 60 },
-            { x: 400, y: 440, width: 500, height: 60, type: 'conveyorRight' }, // Băng chuyền đẩy sang phải
+            { x: 400, y: 440, width: 500, height: 60, type: 'conveyorRight' },
             { x: 1000, y: 440, width: 400, height: 60 },
-            { x: 1400, y: 250, width: 40, height: 250 }, // Tường chắn
-            { x: 1440, y: 440, width: 1000, height: 60 }
+            { x: 1500, y: 440, width: 1000, height: 60 }
         ],
-        spikes: [{ x: 900, y: 550, width: 100, height: 50 }]
+        spikes: [{ x: 900, y: 550, width: 100, height: 50 }, { x: 1400, y: 550, width: 100, height: 50 }]
     },
-    {   // Map 2: Cổng Dịch Chuyển & Kẻ Thù Đi Tuần
+    {   // Map 3: Khám Phá Cổng Dịch Chuyển
         spawn: { x: 50, y: 100 },
         key: { x: 1400, y: 150, collected: false }, door: { x: 2400, y: 360, win: false },
         platforms: [
@@ -32,13 +41,22 @@ const levels = [
             { x: 1300, y: 200, width: 200, height: 20 },
             { x: 1900, y: 440, width: 600, height: 60 }
         ],
-        portals: [
-            { x1: 500, y1: 360, x2: 850, y2: 120 } // Vào cổng tím ở dưới sẽ ra cổng vàng ở trên
-        ],
-        lava: [{ x: 600, y: 550, width: 1300, height: 50 }],
-        enemies: [{ id: 1, x: 2000, y: 408, width: 32, height: 32, vx: 3, minX: 1900, maxX: 2300, type: 'patrol' }]
+        portals: [{ x1: 500, y1: 360, x2: 850, y2: 120 }], // Cổng dưới đưa lên trên
+        lava: [{ x: 600, y: 550, width: 1300, height: 50 }]
     },
-    {   // Map 3: Xưởng Lưỡi Cưa Chết Chóc (1 người chết = All chết)
+    {   // Map 4: Sàn Băng & Cú Nhảy Lò Xo
+        spawn: { x: 50, y: 100 },
+        key: { x: 1300, y: 150, collected: false }, door: { x: 2500, y: 360, win: false },
+        platforms: [
+            { x: 0, y: 440, width: 300, height: 60 },
+            { x: 400, y: 440, width: 400, height: 60, type: 'ice' },
+            { x: 900, y: 440, width: 100, height: 60, type: 'bounce' },
+            { x: 1200, y: 200, width: 300, height: 20 },
+            { x: 1800, y: 440, width: 800, height: 60 }
+        ],
+        lava: [{ x: 300, y: 550, width: 1500, height: 50 }]
+    },
+    {   // Map 5: Xưởng Máy Cưa Điên Loạn
         spawn: { x: 50, y: 100 },
         key: { x: 1500, y: 350, collected: false }, door: { x: 2600, y: 360, win: false },
         platforms: [
@@ -49,33 +67,72 @@ const levels = [
         ],
         spikes: [{ x: 0, y: 550, width: 3000, height: 50 }],
         sawblades: [
-            { x: 1200, y: 410, radius: 30, vx: 4, minX: 1000, maxX: 1700 } // Lưỡi cưa xoay cực nhanh
+            { x: 1200, y: 410, radius: 30, vx: 4, minX: 1000, maxX: 1700 },
+            { x: 2200, y: 410, radius: 30, vx: 5, minX: 2000, maxX: 2500 }
         ]
     },
-    {   // Map 4: Băng chuyền ngược & Quạt gió
-        spawn: { x: 50, y: 300 },
-        key: { x: 1400, y: 150, collected: false }, door: { x: 2000, y: 360, win: false },
+    {   // Map 6: Thủy Cung Dưỡng Khí (Hết Oxy là đi cả lũ)
+        spawn: { x: 50, y: 200 },
+        key: { x: 1200, y: 350, collected: false }, door: { x: 2300, y: 260, win: false },
         platforms: [
-            { x: 0, y: 440, width: 500, height: 60 },
-            { x: 700, y: 440, width: 600, height: 60, type: 'conveyorLeft' }, // Đẩy ngược lại
-            { x: 1600, y: 440, width: 600, height: 60 }
+            { x: 0, y: 300, width: 300, height: 40 },
+            { x: 500, y: 500, width: 1200, height: 40 },
+            { x: 1900, y: 340, width: 500, height: 40 }
         ],
-        wind: [{ x: 1200, y: 150, width: 300, height: 400, forceY: -9 }],
-        lava: [{ x: 500, y: 550, width: 200, height: 50 }, { x: 1300, y: 550, width: 300, height: 50 }]
+        water: [{ x: 400, y: 200, width: 1400, height: 400 }],
+        enemies: [{ id: 1, x: 1000, y: 468, width: 32, height: 32, vx: 2, minX: 800, maxX: 1400, type: 'patrol' }]
     },
-    {   // Map 5: Ma Trận Tổng Hợp
+    {   // Map 7: Cuộc Gọi Của Gió & Mật Ong Trói Chân
         spawn: { x: 50, y: 100 },
-        key: { x: 1500, y: 100, collected: false }, door: { x: 2500, y: 360, win: false },
+        key: { x: 1600, y: 150, collected: false }, door: { x: 2400, y: 360, win: false },
+        platforms: [
+            { x: 0, y: 440, width: 400, height: 60 },
+            { x: 700, y: 440, width: 500, height: 60, type: 'honey' }, // Mật ong dính chặt
+            { x: 1400, y: 200, width: 400, height: 20 },
+            { x: 1900, y: 440, width: 600, height: 60 }
+        ],
+        wind: [{ x: 1200, y: 100, width: 300, height: 450, forceY: -10 }], // Gió đẩy lên
+        lava: [{ x: 400, y: 550, width: 1500, height: 50 }]
+    },
+    {   // Map 8: Combo Băng Chuyền + Máy Cưa
+        spawn: { x: 50, y: 100 },
+        key: { x: 1400, y: 350, collected: false }, door: { x: 2500, y: 360, win: false },
+        platforms: [
+            { x: 0, y: 440, width: 400, height: 60 },
+            { x: 600, y: 440, width: 1000, height: 60, type: 'conveyorLeft' }, // Đẩy lùi
+            { x: 1800, y: 440, width: 800, height: 60 }
+        ],
+        spikes: [{ x: 400, y: 550, width: 200, height: 50 }, { x: 1600, y: 550, width: 200, height: 50 }],
+        sawblades: [{ x: 1000, y: 410, radius: 30, vx: 6, minX: 600, maxX: 1500 }]
+    },
+    {   // Map 9: Ma Trận Không Gian (Đoán xem cổng nào?)
+        spawn: { x: 50, y: 100 },
+        key: { x: 1200, y: 100, collected: false }, door: { x: 2400, y: 360, win: false },
         platforms: [
             { x: 0, y: 440, width: 300, height: 60 },
-            { x: 500, y: 440, width: 300, height: 60, type: 'bounce' },
-            { x: 1000, y: 200, width: 200, height: 60, type: 'conveyorRight' },
-            { x: 1400, y: 150, width: 200, height: 20 },
-            { x: 2000, y: 440, width: 800, height: 60 }
+            { x: 800, y: 440, width: 200, height: 60 },
+            { x: 1100, y: 150, width: 300, height: 20 },
+            { x: 1800, y: 440, width: 800, height: 60 }
         ],
-        portals: [{ x1: 250, y1: 360, x2: 1050, y2: 100 }],
-        sawblades: [{ x: 2100, y: 410, radius: 30, vx: 5, minX: 2000, maxX: 2400 }],
-        lava: [{ x: 300, y: 550, width: 1700, height: 50 }]
+        portals: [
+            { x1: 200, y1: 360, x2: 850, y2: 360 }, // Vào cổng 1 ra giữa
+            { x1: 900, y1: 360, x2: 1200, y2: 70 }  // Cổng giữa đưa lên lấy khóa
+        ],
+        lava: [{ x: 300, y: 550, width: 1500, height: 50 }]
+    },
+    {   // Map 10: Địa Ngục Tổng Hợp (Thử Thách Cuối Cùng)
+        spawn: { x: 50, y: 100 },
+        key: { x: 1600, y: 150, collected: false }, door: { x: 2600, y: 360, win: false },
+        platforms: [
+            { x: 0, y: 440, width: 300, height: 60 },
+            { x: 500, y: 440, width: 200, height: 60, type: 'bounce' },
+            { x: 900, y: 200, width: 300, height: 20, type: 'conveyorRight' },
+            { x: 1500, y: 200, width: 200, height: 20, type: 'ice' },
+            { x: 2100, y: 440, width: 600, height: 60 }
+        ],
+        sawblades: [{ x: 1050, y: 170, radius: 25, vx: 3, minX: 900, maxX: 1200 }],
+        wind: [{ x: 1800, y: 200, width: 200, height: 400, forceX: 5 }],
+        lava: [{ x: 300, y: 550, width: 1800, height: 50 }]
     }
 ];
 
@@ -95,11 +152,12 @@ function initLevel(index) {
             sawblades: lvl.sawblades || [], portals: lvl.portals || [],
             gameFinished: false
         };
-        // Reset toàn bộ người chơi về đúng spawn của map hiện tại
+        // Hồi sinh toàn bộ ở spawn chuẩn
         let spawnP = lvl.spawn || {x: 50, y: 100};
         Object.keys(players).forEach((id, i) => {
             players[id].x = spawnP.x + (i * 10);
             players[id].y = spawnP.y; 
+            players[id].vx = 0; players[id].vy = 0; // Xóa đà rơi
         });
     }
     io.emit('currentPlayers', players);
@@ -110,7 +168,6 @@ function initLevel(index) {
 setInterval(() => {
     if (gameState.gameFinished) return;
     
-    // Cập nhật quái vật
     if (gameState.enemies) {
         gameState.enemies.forEach(enemy => {
             if (enemy.type === 'patrol') {
@@ -120,7 +177,6 @@ setInterval(() => {
         });
     }
     
-    // Cập nhật lưỡi cưa
     if (gameState.sawblades) {
         gameState.sawblades.forEach(saw => {
             saw.x += saw.vx;
@@ -132,13 +188,10 @@ setInterval(() => {
 }, 16.66);
 
 io.on('connection', (socket) => {
-    // FIX LỖI TÀNG HÌNH: Đã thêm width và height vào data của người chơi mới
     let spawnP = levels[currentLevelIndex] ? levels[currentLevelIndex].spawn : {x: 50, y: 100};
     players[socket.id] = {
-        id: socket.id, 
-        x: spawnP.x, y: spawnP.y, 
-        width: 32, height: 40, // ĐÂY LÀ THÔNG SỐ GIÚP NHÂN VẬT KHÔNG BỊ TÀNG HÌNH
-        facing: 'right',
+        id: socket.id, x: spawnP.x, y: spawnP.y, 
+        width: 32, height: 40, facing: 'right',
         color: ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ffa500'][Object.keys(players).length % 7]
     };
     
@@ -162,14 +215,18 @@ io.on('connection', (socket) => {
     socket.on('teamDied', () => { initLevel(currentLevelIndex); });
     
     socket.on('updateGameState', (updatedState) => {
-        if (updatedState.door && updatedState.door.win) { initLevel(currentLevelIndex + 1); }
-        else { gameState.key = updatedState.key || gameState.key; io.emit('gameState', gameState); }
+        // Chỉ xử lý chuyển màn nếu màn CHƯA THẮNG (Ngăn chặn lỗi chạy xuyên 5 màn)
+        if (updatedState.door && updatedState.door.win && !gameState.door.win) { 
+            gameState.door.win = true; // Chốt hạ
+            initLevel(currentLevelIndex + 1); 
+        }
+        else if (updatedState.key) { 
+            gameState.key = updatedState.key; 
+            io.emit('gameState', gameState); 
+        }
     });
 
-    socket.on('disconnect', () => { 
-        delete players[socket.id]; 
-        io.emit('playerDisconnected', socket.id); 
-    });
+    socket.on('disconnect', () => { delete players[socket.id]; io.emit('playerDisconnected', socket.id); });
 });
 
 const PORT = process.env.PORT || 3000;
