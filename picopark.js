@@ -7,17 +7,23 @@ app.use(express.static('public'));
 
 let players = {};
 let currentLevelIndex = 0;
+let isTransitioning = false; // Biến khóa bảo vệ trạng thái chuyển màn từ Server
 const MAP_WIDTH = 3000; 
 
-// HỆ THỐNG 10 MAP ĐỘ KHÓ TĂNG DẦN
 const levels = [
-    {   // Map 1: Vỡ Lòng - Nhảy và Chồng Người
+    {   // Map 1: Phối Hợp Nút Bấm Thần Tốc (Đã tích hợp Gate Co-op mới)
         spawn: { x: 50, y: 100 },
         key: { x: 900, y: 350, collected: false }, door: { x: 1800, y: 360, win: false },
         platforms: [
             { x: 0, y: 440, width: 600, height: 60 },
-            { x: 600, y: 200, width: 40, height: 300 }, // Tường chắn, cần đứng lên đầu nhau
             { x: 640, y: 440, width: 1400, height: 60 }
+        ],
+        buttons: [
+            { id: 'btn_m1_left', x: 350, y: 425, width: 40, height: 15, pressed: false, gateId: 1 },
+            { id: 'btn_m1_right', x: 750, y: 425, width: 40, height: 15, pressed: false, gateId: 1 }
+        ],
+        gates: [
+            { id: 1, x: 600, y: 200, width: 40, height: 240, open: false }
         ],
         spikes: []
     },
@@ -41,7 +47,7 @@ const levels = [
             { x: 1300, y: 200, width: 200, height: 20 },
             { x: 1900, y: 440, width: 600, height: 60 }
         ],
-        portals: [{ x1: 500, y1: 360, x2: 850, y2: 120 }], // Cổng dưới đưa lên trên
+        portals: [{ x1: 500, y1: 360, x2: 850, y2: 120 }],
         lava: [{ x: 600, y: 550, width: 1300, height: 50 }]
     },
     {   // Map 4: Sàn Băng & Cú Nhảy Lò Xo
@@ -71,7 +77,7 @@ const levels = [
             { x: 2200, y: 410, radius: 30, vx: 5, minX: 2000, maxX: 2500 }
         ]
     },
-    {   // Map 6: Thủy Cung Dưỡng Khí (Hết Oxy là đi cả lũ)
+    {   // Map 6: Thủy Cung Dưỡng Khí
         spawn: { x: 50, y: 200 },
         key: { x: 1200, y: 350, collected: false }, door: { x: 2300, y: 260, win: false },
         platforms: [
@@ -82,16 +88,22 @@ const levels = [
         water: [{ x: 400, y: 200, width: 1400, height: 400 }],
         enemies: [{ id: 1, x: 1000, y: 468, width: 32, height: 32, vx: 2, minX: 800, maxX: 1400, type: 'patrol' }]
     },
-    {   // Map 7: Cuộc Gọi Của Gió & Mật Ong Trói Chân
+    {   // Map 7: Mật Ong Dính Chân & Cửa Chốt Đuôi
         spawn: { x: 50, y: 100 },
-        key: { x: 1600, y: 150, collected: false }, door: { x: 2400, y: 360, win: false },
+        key: { x: 1600, y: 150, collected: false }, door: { x: 2500, y: 360, win: false },
         platforms: [
             { x: 0, y: 440, width: 400, height: 60 },
-            { x: 700, y: 440, width: 500, height: 60, type: 'honey' }, // Mật ong dính chặt
+            { x: 700, y: 440, width: 500, height: 60, type: 'honey' },
             { x: 1400, y: 200, width: 400, height: 20 },
-            { x: 1900, y: 440, width: 600, height: 60 }
+            { x: 1900, y: 440, width: 800, height: 60 }
         ],
-        wind: [{ x: 1200, y: 100, width: 300, height: 450, forceY: -10 }], // Gió đẩy lên
+        buttons: [
+            { id: 'btn_m7', x: 950, y: 425, width: 40, height: 15, pressed: false, gateId: 7 }
+        ],
+        gates: [
+            { id: 7, x: 2350, y: 360, width: 30, height: 80, open: false }
+        ],
+        wind: [{ x: 1200, y: 100, width: 300, height: 450, forceY: -10 }],
         lava: [{ x: 400, y: 550, width: 1500, height: 50 }]
     },
     {   // Map 8: Combo Băng Chuyền + Máy Cưa
@@ -99,13 +111,13 @@ const levels = [
         key: { x: 1400, y: 350, collected: false }, door: { x: 2500, y: 360, win: false },
         platforms: [
             { x: 0, y: 440, width: 400, height: 60 },
-            { x: 600, y: 440, width: 1000, height: 60, type: 'conveyorLeft' }, // Đẩy lùi
+            { x: 600, y: 440, width: 1000, height: 60, type: 'conveyorLeft' },
             { x: 1800, y: 440, width: 800, height: 60 }
         ],
         spikes: [{ x: 400, y: 550, width: 200, height: 50 }, { x: 1600, y: 550, width: 200, height: 50 }],
         sawblades: [{ x: 1000, y: 410, radius: 30, vx: 6, minX: 600, maxX: 1500 }]
     },
-    {   // Map 9: Ma Trận Không Gian (Đoán xem cổng nào?)
+    {   // Map 9: Ma Trận Không Gian
         spawn: { x: 50, y: 100 },
         key: { x: 1200, y: 100, collected: false }, door: { x: 2400, y: 360, win: false },
         platforms: [
@@ -115,12 +127,12 @@ const levels = [
             { x: 1800, y: 440, width: 800, height: 60 }
         ],
         portals: [
-            { x1: 200, y1: 360, x2: 850, y2: 360 }, // Vào cổng 1 ra giữa
-            { x1: 900, y1: 360, x2: 1200, y2: 70 }  // Cổng giữa đưa lên lấy khóa
+            { x1: 200, y1: 360, x2: 850, y2: 360 },
+            { x1: 900, y1: 360, x2: 1200, y2: 70 }
         ],
         lava: [{ x: 300, y: 550, width: 1500, height: 50 }]
     },
-    {   // Map 10: Địa Ngục Tổng Hợp (Thử Thách Cuối Cùng)
+    {   // Map 10: Địa Ngục Tổng Hợp
         spawn: { x: 50, y: 100 },
         key: { x: 1600, y: 150, collected: false }, door: { x: 2600, y: 360, win: false },
         platforms: [
@@ -150,14 +162,14 @@ function initLevel(index) {
             lava: lvl.lava || [], water: lvl.water || [],
             wind: lvl.wind || [], enemies: lvl.enemies || [],
             sawblades: lvl.sawblades || [], portals: lvl.portals || [],
+            buttons: lvl.buttons || [], gates: lvl.gates || [],
             gameFinished: false
         };
-        // Hồi sinh toàn bộ ở spawn chuẩn
         let spawnP = lvl.spawn || {x: 50, y: 100};
         Object.keys(players).forEach((id, i) => {
-            players[id].x = spawnP.x + (i * 10);
+            players[id].x = spawnP.x + (i * 15);
             players[id].y = spawnP.y; 
-            players[id].vx = 0; players[id].vy = 0; // Xóa đà rơi
+            players[id].vx = 0; players[id].vy = 0;
         });
     }
     io.emit('currentPlayers', players);
@@ -183,8 +195,38 @@ setInterval(() => {
             if (saw.x <= saw.minX || saw.x >= saw.maxX) saw.vx *= -1;
         });
     }
+
+    // XỬ LÝ VẬT LÝ NÚT BẤM VÀ CỬA SẬP CO-OP TRÊN SERVER
+    if (gameState.buttons && gameState.gates) {
+        gameState.buttons.forEach(btn => {
+            let anyPlayerOnBtn = false;
+            Object.values(players).forEach(p => {
+                let pw = p.width || 32; let ph = p.height || 40;
+                // Check va chạm người chơi đứng đè lên nút
+                if (p.x < btn.x + btn.width && p.x + pw > btn.x &&
+                    p.y < btn.y + btn.height && p.y + ph > btn.y - 6) {
+                    anyPlayerOnBtn = true;
+                }
+            });
+            btn.pressed = anyPlayerOnBtn;
+        });
+
+        // Cập nhật trạng thái mở của Gate nếu bất kỳ nút tương ứng nào được bấm
+        gameState.gates.forEach(gate => {
+            let shouldOpen = false;
+            gameState.buttons.forEach(btn => {
+                if (btn.gateId === gate.id && btn.pressed) shouldOpen = true;
+            });
+            gate.open = shouldOpen;
+        });
+    }
     
-    io.emit('updateDynamicObjects', { enemies: gameState.enemies, sawblades: gameState.sawblades });
+    io.emit('updateDynamicObjects', { 
+        enemies: gameState.enemies, 
+        sawblades: gameState.sawblades,
+        buttons: gameState.buttons,
+        gates: gameState.gates
+    });
 }, 16.66);
 
 io.on('connection', (socket) => {
@@ -212,13 +254,25 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('teamDied', () => { initLevel(currentLevelIndex); });
+    socket.on('teamDied', () => { 
+        if(!isTransitioning) initLevel(currentLevelIndex); 
+    });
     
     socket.on('updateGameState', (updatedState) => {
-        // Chỉ xử lý chuyển màn nếu màn CHƯA THẮNG (Ngăn chặn lỗi chạy xuyên 5 màn)
+        // Chặn tuyệt đối nếu lệch màn hình hiện tại hoặc đang trong quá trình load màn mới
+        if (updatedState.levelIndex !== currentLevelIndex || isTransitioning) return;
+
         if (updatedState.door && updatedState.door.win && !gameState.door.win) { 
-            gameState.door.win = true; // Chốt hạ
-            initLevel(currentLevelIndex + 1); 
+            gameState.door.win = true; 
+            io.emit('gameState', gameState); // Đồng bộ cho mọi máy hiển thị màu xanh lá (Win)
+            
+            isTransitioning = true; // Khóa nhận sự kiện
+            
+            // ĐỢI 1.5 GIÂY CHO CÁC MÁY CÙNG XEM HIỆU ỨNG RỒI MỚI CHUYỂN LEVEL
+            setTimeout(() => {
+                isTransitioning = false;
+                initLevel(currentLevelIndex + 1);
+            }, 1500);
         }
         else if (updatedState.key) { 
             gameState.key = updatedState.key; 
@@ -230,4 +284,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => console.log(`Server Pico Park chạy tại port ${PORT}`));
+http.listen(PORT, () => console.log(`Server Pico Park chay tai port ${PORT}`));
