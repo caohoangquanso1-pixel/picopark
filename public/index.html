@@ -2,7 +2,7 @@
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <title>Super Pico Park - Siêu Đội Bóp Team</title>
+    <title>Super Pico Park - 10 Tầng Địa Ngục</title>
     <style>
         body { margin: 0; background: #87CEEB; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         canvas { display: block; width: 100vw; height: 100vh; }
@@ -18,7 +18,7 @@
 
     <div id="uiLayer">
         <h1 id="mapTitle">SUPER PICO PARK - MAP 1</h1>
-        <div class="hud">CƠ CHẾ: Cổng tím ra cổng vàng! Băng chuyền đẩy lùi! 1 người CHẾT là CẢ TEAM phải chơi lại! Chỉ cần 1 người vào CỬA là qua màn.</div>
+        <div class="hud">CƠ CHẾ: Cổng tím ra cổng vàng! Băng chuyền đẩy lùi! 1 người CHẾT là CẢ TEAM chơi lại! Chỉ cần 1 người vào CỬA là qua màn.</div>
         <div class="hud">OXY DƯỚI NƯỚC: <div class="oxygen-bar"><div id="oxyFill" class="oxygen-fill"></div></div></div>
     </div>
     
@@ -61,7 +61,13 @@
         socket.on('newPlayer', p => { if(p.id !== socket.id) otherPlayers[p.id] = p; });
         socket.on('playerMoved', p => { otherPlayers[p.id] = p; });
         socket.on('playerDisconnected', id => delete otherPlayers[id]);
-        socket.on('gameState', s => { gameState = s; document.getElementById('mapTitle').innerText = `SUPER PICO PARK - MAP ${gameState.levelIndex + 1}`; });
+        
+        socket.on('gameState', s => { 
+            gameState = s; 
+            document.getElementById('mapTitle').innerText = `SUPER PICO PARK - MAP ${gameState.levelIndex + 1}`; 
+            // Đặt lại tọa độ khi đổi màn (tránh bị kẹt camera hoặc kẹt vật lý)
+            localPlayer.vx = 0; localPlayer.vy = 0;
+        });
         
         socket.on('updateDynamicObjects', d => { 
             if(d.enemies) gameState.enemies = d.enemies; 
@@ -92,7 +98,7 @@
                 let portal1 = { x: p.x1, y: p.y1, width: 40, height: 60 };
                 if (checkAABB(localPlayer, portal1) && localPlayer.portalCooldown === 0) {
                     localPlayer.x = p.x2; localPlayer.y = p.y2;
-                    localPlayer.portalCooldown = 100; // Nghỉ 1 lúc mới đc chui tiếp
+                    localPlayer.portalCooldown = 100;
                 }
             });
 
@@ -105,7 +111,6 @@
             let moveSpeed = 5; let acc = 0.6;
             if (currentBlockType === 'honey') moveSpeed = 1.5;
 
-            // BĂNG CHUYỀN LÀM THAY ĐỔI VỊ TRÍ
             if (currentBlockType === 'conveyorRight') localPlayer.x += 3;
             if (currentBlockType === 'conveyorLeft') localPlayer.x -= 3;
 
@@ -206,14 +211,14 @@
             if (cameraX < 0) cameraX = 0;
             if (cameraX > MAP_WIDTH - canvas.width) cameraX = MAP_WIDTH - canvas.width;
 
-            // KIỂM TRA CHẾT - 1 NGƯỜI CHẾT CẢ ĐÁM CHƠI LẠI
+            // KIỂM TRA CHẾT
             let dead = false;
             gameState.spikes.forEach(s => { if (checkAABB(localPlayer, s)) dead = true; });
             gameState.lava.forEach(l => { if (checkAABB(localPlayer, l)) dead = true; });
             gameState.enemies.forEach(e => { if (checkAABB(localPlayer, e)) dead = true; });
             gameState.sawblades.forEach(saw => {
                 let dist = Math.hypot(localPlayer.x + 16 - saw.x, localPlayer.y + 20 - saw.y);
-                if (dist < saw.radius + 10) dead = true; // Va chạm cưa
+                if (dist < saw.radius + 10) dead = true;
             });
             if (localPlayer.y > 1500) dead = true; 
             if (dead) { socket.emit('teamDied'); return; }
@@ -224,17 +229,18 @@
                 socket.emit('updateGameState', { key: { ...gameState.key, collected: true } });
             }
 
-            // CHỈ CẦN 1 NGƯỜI VÀO CỬA LÀ THẮNG
-            if (gameState.key && gameState.key.collected && gameState.door) {
+            // CHỈ CẦN 1 NGƯỜI VÀO CỬA LÀ THẮNG - FIX LỖI GỌI MAP LIÊN TỤC
+            if (gameState.key && gameState.key.collected && gameState.door && !gameState.door.win) {
                 let doorRect = { x: gameState.door.x, y: gameState.door.y, width: 60, height: 80 };
                 if (checkAABB(localPlayer, doorRect)) {
+                    // Khóa trạng thái cửa ở máy con, báo lên server đúng 1 lần thôi
+                    gameState.door.win = true; 
                     socket.emit('updateGameState', { door: { ...gameState.door, win: true } });
                 }
             }
         }
 
         function drawAmongUs(p, color) {
-            // FIX TÀNG HÌNH: Đảm bảo có width height đàng hoàng, fallback về 32x40 nếu thiếu
             let w = p.width || 32; let h = p.height || 40; 
             
             ctx.fillStyle = color;
@@ -261,7 +267,6 @@
             if (plat.type === 'honey') ctx.fillStyle = '#ffa502';
             if (plat.type === 'bounce') ctx.fillStyle = '#ff4757'; 
             
-            // Vẽ Băng chuyền
             if (plat.type === 'conveyorRight' || plat.type === 'conveyorLeft') {
                 ctx.fillStyle = '#576574'; ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
                 ctx.fillStyle = '#feca57'; ctx.font = '20px Arial';
@@ -295,11 +300,10 @@
                 ctx.fillStyle = '#fff'; ctx.fillText('🌬️', w.x + w.width/2 - 10, w.y + w.height/2);
             });
 
-            // Vẽ cổng Portal
             gameState.portals.forEach(p => {
-                ctx.fillStyle = '#9b59b6'; // Tím (Cửa vào)
+                ctx.fillStyle = '#9b59b6';
                 ctx.beginPath(); ctx.ellipse(p.x1 + 20, p.y1 + 30, 20, 30, 0, 0, Math.PI*2); ctx.fill();
-                ctx.fillStyle = '#f1c40f'; // Vàng (Cửa ra)
+                ctx.fillStyle = '#f1c40f';
                 ctx.beginPath(); ctx.ellipse(p.x2 + 20, p.y2 + 30, 20, 30, 0, 0, Math.PI*2); ctx.fill();
             });
 
@@ -325,18 +329,17 @@
                 ctx.fillStyle = '#ff4757'; ctx.beginPath(); ctx.arc(e.x + 10, e.y + 10, 4, 0, Math.PI*2); ctx.arc(e.x + 22, e.y + 10, 4, 0, Math.PI*2); ctx.fill();
             });
 
-            // Vẽ Lưỡi cưa
             gameState.sawblades.forEach(saw => {
                 ctx.save();
                 ctx.translate(saw.x, saw.y);
-                ctx.rotate(Date.now() / 50); // Xoay vòng vòng
+                ctx.rotate(Date.now() / 50); 
                 ctx.fillStyle = '#bdc3c7'; ctx.beginPath(); ctx.arc(0, 0, saw.radius, 0, Math.PI * 2); ctx.fill();
                 ctx.fillStyle = '#7f8c8d';
                 for(let i=0; i<8; i++) {
                     ctx.rotate(Math.PI / 4);
                     ctx.beginPath(); ctx.moveTo(saw.radius - 5, -8); ctx.lineTo(saw.radius + 10, 0); ctx.lineTo(saw.radius - 5, 8); ctx.fill();
                 }
-                ctx.fillStyle = '#e74c3c'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI*2); ctx.fill(); // Tâm đỏ
+                ctx.fillStyle = '#e74c3c'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI*2); ctx.fill(); 
                 ctx.restore();
             });
 
@@ -357,7 +360,7 @@
             if (gameState.gameFinished) {
                 ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#f1c40f'; ctx.font = 'bold 50px Arial'; ctx.textAlign = 'center';
-                ctx.fillText("CHÚC MỪNG BẠN ĐÃ PHÁ ĐẢO! 🎉", canvas.width/2, canvas.height/2);
+                ctx.fillText("CHÚC MỪNG BẠN ĐÃ PHÁ ĐẢO 10 MÀN! 🎉", canvas.width/2, canvas.height/2);
             }
         }
 
