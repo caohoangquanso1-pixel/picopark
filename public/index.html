@@ -34,7 +34,7 @@
 
         const gravity = 0.6;
         let localId = null;
-        let localPlayer = { x: 50, y: 100, vx: 0, vy: 0, width: 32, height: 40, ground: false, facing: 'right', oxygen: 100, portalCooldown: 0 };
+        let localPlayer = { x: 50, y: 100, vx: 0, vy: 0, width: 32, height: 40, ground: false, facing: 'right', oxygen: 100, portalCooldown: 0, deadLock: false };
         let otherPlayers = {};
         let gameState = { platforms: [], spikes: [], lava: [], water: [], wind: [], enemies: [], sawblades: [], portals: [], zeroGravity: [], key: {}, door: {}, gameFinished: false };
         
@@ -84,12 +84,13 @@
             gameState = s; 
             document.getElementById('mapTitle').innerText = `SUPER PICO PARK - MAP ${gameState.levelIndex + 1}`; 
             
-            // FIX LỖI RƠI VÔ TẬN: Bắt buộc kéo nhân vật về vị trí spawn từ Server
             if (s.spawn) { 
-                localPlayer.x = s.spawn.x; 
+                // Tách nhẹ vị trí để 3 người không bị dính vào chung 1 pixel
+                localPlayer.x = s.spawn.x + Math.floor(Math.random() * 30); 
                 localPlayer.y = s.spawn.y; 
             }
             localPlayer.vx = 0; localPlayer.vy = 0;
+            localPlayer.deadLock = false; // Mở khóa spam chết khi hồi sinh
         });
         
         socket.on('updateDynamicObjects', d => { 
@@ -104,7 +105,6 @@
         function update() {
             if (gameState.gameFinished) return;
 
-            // NỘI SUY DI CHUYỂN NGƯỜI CHƠI KHÁC (Chống giật lag)
             Object.keys(otherPlayers).forEach(id => {
                 let other = otherPlayers[id];
                 if (other.targetX !== undefined) {
@@ -157,7 +157,6 @@
                 localPlayer.oxygen = Math.max(localPlayer.oxygen - 0.2, 0);
                 if (localPlayer.oxygen <= 0) socket.emit('teamDied');
             } else if (inZeroG) {
-                // DI CHUYỂN KHÔNG TRỌNG LỰC
                 if (keys['ArrowLeft'] || keys['KeyA']) { localPlayer.vx = -4; localPlayer.facing = 'left'; }
                 else if (keys['ArrowRight'] || keys['KeyD']) { localPlayer.vx = 4; localPlayer.facing = 'right'; }
                 else localPlayer.vx *= 0.8;
@@ -193,7 +192,6 @@
 
             document.getElementById('oxyFill').style.width = `${localPlayer.oxygen}%`;
 
-            // === VẬT LÝ TRỤC X ===
             localPlayer.x += localPlayer.vx;
             if (localPlayer.x < 0) localPlayer.x = 0;
             if (localPlayer.x + localPlayer.width > MAP_WIDTH) localPlayer.x = MAP_WIDTH - localPlayer.width;
@@ -206,7 +204,6 @@
                 }
             });
 
-            // PHỤC HỒI: Va chạm X với người chơi khác
             Object.values(otherPlayers).forEach(other => {
                 let w = other.width || 32; let h = other.height || 40;
                 let otherRect = {x: other.x, y: other.y, width: w, height: h};
@@ -217,7 +214,6 @@
                 }
             });
 
-            // === VẬT LÝ TRỤC Y ===
             localPlayer.y += localPlayer.vy;
             localPlayer.ground = false;
 
@@ -234,7 +230,6 @@
                 }
             });
 
-            // PHỤC HỒI: Va chạm Y với người chơi khác (Cho phép đứng lên đầu)
             Object.values(otherPlayers).forEach(other => {
                 let w = other.width || 32; let h = other.height || 40;
                 let otherRect = {x: other.x, y: other.y, width: w, height: h};
@@ -250,14 +245,12 @@
                 }
             });
 
-            // GIAO TIẾP MẠNG
             let now = Date.now();
             if (now - lastEmitTime > 35) {
                 socket.emit('playerMovement', { x: localPlayer.x, y: localPlayer.y, facing: localPlayer.facing });
                 lastEmitTime = now;
             }
 
-            // PHỤC HỒI: CAMERA DI CHUYỂN THEO NHÂN VẬT
             cameraX = localPlayer.x - canvas.width / 2 + 16;
             cameraY = localPlayer.y - canvas.height / 2 + 100;
             if (cameraX < 0) cameraX = 0;
@@ -272,22 +265,32 @@
                 let dist = Math.hypot(localPlayer.x + 16 - saw.x, localPlayer.y + 20 - saw.y);
                 if (dist < saw.radius + 10) dead = true;
             });
-            if (localPlayer.y > 2000) dead = true; 
             
-            if (dead) { socket.emit('teamDied'); return; }
+            // FIX: Vực thẳm kéo lên mốc 800 để rơi xuống là chết ngay
+            if (localPlayer.y > 800) dead = true; 
+            
+            if (dead) { 
+                if (!localPlayer.deadLock) {
+                    socket.emit('teamDied'); 
+                    localPlayer.deadLock = true;
+                }
+                return; 
+            } else {
+                localPlayer.deadLock = false;
+            }
 
-            // CHÌA KHÓA & CỬA
+            // FIX: CHÌA KHÓA & CỬA ĐÃ BỔ SUNG levelIndex
             let keyRect = { x: gameState.key?.x, y: gameState.key?.y, width: 30, height: 30 };
             if (gameState.key && !gameState.key.collected && checkAABB(localPlayer, keyRect)) {
-                gameState.key.collected = true; // Khóa ngay lập tức chống spam
-                socket.emit('updateGameState', { key: { ...gameState.key, collected: true } });
+                gameState.key.collected = true; 
+                socket.emit('updateGameState', { levelIndex: gameState.levelIndex, key: { ...gameState.key, collected: true } });
             }
 
             if (gameState.key && gameState.key.collected && gameState.door && !gameState.door.win) {
                 let doorRect = { x: gameState.door.x, y: gameState.door.y, width: 60, height: 80 };
                 if (checkAABB(localPlayer, doorRect)) {
                     gameState.door.win = true; 
-                    socket.emit('updateGameState', { door: { ...gameState.door, win: true } });
+                    socket.emit('updateGameState', { levelIndex: gameState.levelIndex, door: { ...gameState.door, win: true } });
                 }
             }
         }
@@ -338,7 +341,6 @@
             ctx.save();
             ctx.translate(-cameraX, -cameraY);
 
-            // VẼ VÙNG KHÔNG TRỌNG LỰC 🌌
             if (gameState.zeroGravity) {
                 gameState.zeroGravity.forEach(zg => {
                     ctx.fillStyle = 'rgba(155, 89, 182, 0.15)';
